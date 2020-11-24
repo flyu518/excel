@@ -29,9 +29,15 @@ PHP 通过生成 XML 或者 HTML 从而转成 EXCEl，解决了其他生成 EXCE
  $excel->createSheet('表1'); // 名称要唯一
  $excel->addRow($headers);
 
+ // 如果批量这样（效率更高）
+ $excel->batch($data);
+ 
+ /*
+ // 如果单行插入这样
  foreach($data as $item){
      $excel->addRow($headers);
  }
+ */
 
  $excel->done();
 ```
