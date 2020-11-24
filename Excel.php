@@ -21,7 +21,7 @@ use \yii\base\Exception;
  *      ['test2', '186']
  *  ];
  *
- *  $excel = new ExcelXml('/tmp/test.xls');
+ *  $excel = new Excel('/tmp/test.xls');
  *
  *  // 如果想多表，重复下面这一部分
  *  $excel->createSheet('表1'); // 名称要唯一
@@ -56,7 +56,7 @@ use \yii\base\Exception;
  * </Style>
  *EOF;
  *
- * $excel = new ExcelXml($fileFullName, ['fontName' => 'Yuanti SC Regular', 'style' => $style]);
+ * $excel = new Excel($fileFullName, ['fontName' => 'Yuanti SC Regular', 'style' => $style]);
  *
  * $excel->createSheet('Sheet1', ['column' => [['index' => 1, 'width' => 101.65], ['index' => 5, 'width' => 144.1]]]);
  *
