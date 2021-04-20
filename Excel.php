@@ -8,11 +8,14 @@ use \yii\base\Exception;
 /**
  * 通过生成 Excel
  *
- * 说明：支持两种模式：XML、HTML，默认 XML；
- * 两种模式不同：
+ * 说明：支持两种模式：XML、HTML、CSV，默认 XML；
+ * 三种模式不同，需要根据需求选择：
  *  1、XML：不支持插入图片，支持多工作表；HTML：支持插入图片（直接使用<img>标签，下面有示例），不支持支持多工作表 ！！！
  *  2、自定义样式（看 $this->style 介绍）
  *  3、表格中内容 XML 模式只支持纯字符串或者数字，HTML 模式支持 html 标签
+ *  4、CSV模式不支持样式、不支持图片、不支持多工作表，只支持纯文本，并且导出编码为：GB2312，不是UTF-8，转码有消耗 ！！！！
+ *  5、因为 HTML、XML 不是标准 excel 格式，所以有的设备打不开，CSV可以
+ *  6、文件后缀：HTML、XML要写.xls（.xlsx很大可能打不开），CSV直接写.csv
  *
  * 1、简单使用方式：
  *  $headers = ['姓名', '电话'];
@@ -21,15 +24,19 @@ use \yii\base\Exception;
  *      ['test2', '186']
  *  ];
  *
- *  $excel = new Excel('/tmp/test.xls');
+ *  $excel = new Excel(Yii::$app->runtimePath.'/excel.xls', ['type' => 'xml']); // 默认就是 xml 可以不写
  *
  *  // 如果想多表，重复下面这一部分
  *  $excel->createSheet('表1'); // 名称要唯一
  *  $excel->addRow($headers);
  *
- *  foreach($data as $item){
- *      $excel->addRow($headers);
- *  }
+ *  // 1、单行添加（效率差，内存不容易爆）
+ *  //foreach($data as $item){
+ *  //    $excel->addRow($item);
+ *  //}
+ *
+ *  // 2、多行添加（效率高，数据多容易爆内存，要控制好）
+ *  $excel->batch($data);
  *
  *  $excel->done();
  *
@@ -59,12 +66,8 @@ use \yii\base\Exception;
  * $excel = new Excel($fileFullName, ['fontName' => 'Yuanti SC Regular', 'style' => $style]);
  *
  * $excel->createSheet('Sheet1', ['column' => [['index' => 1, 'width' => 101.65], ['index' => 5, 'width' => 144.1]]]);
- *
  * $excel->addRow($headers);
- *
- * foreach ($data as $item){
- *  $excel->addRow($item);
- * }
+ * $excel->batch($data);
  *
  * $excel->done();
  *
@@ -77,9 +80,7 @@ use \yii\base\Exception;
  * $excel->addRow($headers);
  *
  * $data = [['小崔', '176']];
- * foreach ($data as $item){
- *  $excel->addRow($item);
- *}
+ * $excel->batch($data);
  *
  * // 但是下面就不一样了
  * $excel->doneSheet(); // 补充主表未完成的结构（如果先写一张表再写一张不需要这样）
@@ -87,9 +88,7 @@ use \yii\base\Exception;
  * $excel2 = new Excel($fileFullName.'_tmp', ['isStart' => false]); // isStart 必须
  * $excel2->createSheet('表2');
  * $excel2->addRow($headers);
- * foreach ($data as $item){
- *  $excel2->addRow($item);
- *}
+ * $excel->batch($data);
  *
  * $excel->write($excel2->read()); // 当两张表都完成的时候合并
  * $excel2->del(); // 释放资源
@@ -102,6 +101,7 @@ class Excel
     // 文档原始格式
     const TYPE_XML = 'XML';
     const TYPE_HTML = 'HTML';
+    const TYPE_CSV = 'CSV';
 
     // 当前文档原始格式，默认 XML
     protected $type = self::TYPE_XML;
@@ -133,7 +133,7 @@ class Excel
     /**
      * 新增样式
      *
-     * XML 模式格式如下，ss::ID 不能和默认的重复，具体参数值可以在 excel 里面设置好想要的样式，然后转存成 xml，查看对应的样式就好了；
+     * XML 模式格式如下，ss:ID 不能和默认的重复，具体参数值可以在 excel 里面设置好想要的样式，然后转存成 xml，查看对应的样式就好了；
      * 设置之后就可以通过指定 styleId，进行样式设置了
      *
      *$style = <<<EOF
@@ -178,11 +178,24 @@ class Excel
      */
     public function __construct($filePath, $config = [])
     {
-        if (!empty($config['type']) && self::TYPE_HTML == strtoupper($config['type'])) $this->type = self::TYPE_HTML;
+        if(!empty($config['type'])){
+            if(self::TYPE_HTML == strtoupper($config['type'])){
+                $this->type = self::TYPE_HTML;
+            }else if(self::TYPE_CSV == strtoupper($config['type'])){
+                $this->type = self::TYPE_CSV;
+            }
+        }
         if (!empty($config['fontName'])) $this->fontName = $config['fontName'];
         if (!empty($config['fontSize'])) $this->fontSize = $config['fontSize'];
         if (!empty($config['fontColor'])) $this->fontColor = $config['fontColor'];
         if (!empty($config['style'])) $this->style = $config['style'];
+
+        /**
+         * 如果解决文件名中文乱码，要加这一个，但是先安装软件，或者就别用中文
+         * locale -a|grep zh_CN如果不支持查看系统编码
+         * apt install language-pack-zh-hans
+         */
+        // setlocale(LC_ALL, 'zh_CN.UTF-8');
 
         $this->filePath = trim($filePath);
         $this->handle = fopen($this->filePath, "wb+");
@@ -219,11 +232,16 @@ class Excel
     /**
      * 写入当前正在操作的文件（除非特殊需要，不要这样操作）
      *
+     * 如果生成csv文件，则转码成gb2312
+     *
      * @param string $content 要写入的数据
      * @return boolean
      */
     public function write($content)
     {
+        if(self::TYPE_CSV == $this->type){
+            $content = iconv("UTF-8", "GB2312//IGNORE", $content);  // 这里将UTF-8转为GB2312编码
+        }
         return fwrite($this->handle, $content);
     }
 
@@ -239,19 +257,19 @@ class Excel
     // 创建最外层
     private function createRoot()
     {
-        fwrite($this->handle, $this->getRootCode());
+        $this->write($this->getRootCode());
     }
 
     // 创建最外层的最后一部分
     private function doneRoot()
     {
-        fwrite($this->handle, $this->getRootEndCode());
+        $this->write($this->getRootEndCode());
     }
 
     // 创建样式
     private function createStyle()
     {
-        fwrite($this->handle, $this->getStyleCode());
+        $this->write($this->getStyleCode());
     }
 
     /**
@@ -280,17 +298,17 @@ class Excel
         $this->sheetCount++;
         $sheetName = !empty($sheetName) && 'Sheet' != $sheetName ? $sheetName : $sheetName . $this->sheetCount;
 
-        fwrite($this->handle, $this->getSheetCode($sheetName));
+        $this->write($this->getSheetCode($sheetName));
 
         if (!empty($ext['column'])) {
-            fwrite($this->handle, $this->getColumnCode($ext['column']));
+            $this->write($this->getColumnCode($ext['column']));
         }
     }
 
     // 创建工作表的最后一部分
     public function doneSheet()
     {
-        fwrite($this->handle, $this->getSheetEndCode());
+        $this->write($this->getSheetEndCode());
     }
 
     /**
@@ -318,7 +336,7 @@ class Excel
     public function addRow($row_data, $ext = [])
     {
         $row_str = self::joinRowData($row_data, $ext);
-        fwrite($this->handle, $row_str);
+        $this->write($row_str);
 
         $this->currentRowNo++;
     }
@@ -332,6 +350,7 @@ class Excel
      */
     public function batch($data)
     {
+        $data = array_values($data); // 防止传关联数组
         $row_str = '';
         foreach($data as $k => $row){
             $row_str .= self::joinRowData($row);
@@ -339,13 +358,13 @@ class Excel
 
             // 500 行插入一次
             if(0 == $k % 500){
-                fwrite($this->handle, $row_str);
+                $this->write($row_str);
                 $row_str = '';
             }
         }
 
         // 不足 500 的
-        fwrite($this->handle, $row_str);
+        $this->write($row_str);
     }
 
     /**
@@ -407,6 +426,8 @@ class Excel
  xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
  xmlns:html="http://www.w3.org/TR/REC-html40">
 EOF;
+        } else if(self::TYPE_CSV == $this->type){
+            $str = '';
         } else {
             $str = <<<EOF
 <html xmlns:o="urn:schemas-microsoft-com:office:office"
@@ -426,7 +447,9 @@ EOF;
     {
         if (self::TYPE_XML == $this->type) {
             $str = '</Workbook>';
-        } else {
+        } else if(self::TYPE_CSV == $this->type){
+            $str = '';
+        }  else {
             $str = '</html>';
         }
         return $str;
@@ -458,31 +481,33 @@ EOF;
         <Style ss:ID="s52" ss:Name="黄色背景">
             <Interior ss:Color="#FFFF00" ss:Pattern="Solid"/>
         </Style>
-        <Style ss:ID="s53" ss::Name="倾斜">
+        <Style ss:ID="s53" ss:Name="倾斜">
             <Font ss:Italic="1"/>
         </Style>
-        <Style ss:ID="s54" ss::Name="加粗">
+        <Style ss:ID="s54" ss:Name="加粗">
             <Font ss:Bold="1"/>
         </Style>
-        <Style ss:ID="s55" ss::Name="适中">
+        <Style ss:ID="s55" ss:Name="适中">
             <Alignment ss:Horizontal="Center"/>
         </Style>
-        <Style ss:ID="s56" ss::Name="删除线">
+        <Style ss:ID="s56" ss:Name="删除线">
             <Font ss:StrikeThrough="1"/>
         </Style>
-        <Style ss:ID="s57" ss::Name="下划线">
+        <Style ss:ID="s57" ss:Name="下划线">
             <Font ss:Underline="Single"/>
         </Style>
-        <Style ss:ID="s58" ss::Name="上标">
+        <Style ss:ID="s58" ss:Name="上标">
             <Font ss:VerticalAlign="Superscript"/>
         </Style>
-        <Style ss:ID="s59" ss::Name="下标">
+        <Style ss:ID="s59" ss:Name="下标">
             <Font ss:VerticalAlign="Subscript"/>
         </Style>
         {$this->style}
     </Styles>
 EOF;
-        } else {
+        } else if(self::TYPE_CSV == $this->type){
+            $str = '';
+        }  else {
             $str = <<<EOF
     <style>
     tr
@@ -596,7 +621,9 @@ EOF;
     <Worksheet ss:Name="{$sheetName}">
         <Table x:FullColumns="1" x:FullRows="1" ss:DefaultColumnWidth="53" ss:DefaultRowHeight="15" ss:StyleID="s40">
 EOF;
-        } else {
+        } else if(self::TYPE_CSV == $this->type){
+            $str = '';
+        }  else {
             $str = <<<EOF
     <body link="blue" vlink="purple" class="s40">
         <table width="420.55" border="0" cellpadding="0" cellspacing="0" style='width:420.55pt;border-collapse:collapse;table-layout:fixed;'>
@@ -611,7 +638,9 @@ EOF;
     {
         if (self::TYPE_XML == $this->type) {
             $str = '</Table></Worksheet>';
-        } else {
+        } else if(self::TYPE_CSV == $this->type){
+            $str = '';
+        }  else {
             $str = '</table></body>';
         }
 
@@ -631,7 +660,9 @@ EOF;
             foreach ($attribute as $item) {
                 $str .= '<Column ss:Index="' . $item['index'] . '" ss:StyleID="s49" ss:AutoFitWidth="0" ss:Width="' . $item['width'] . '"/>';
             }
-        } else {
+        } else if(self::TYPE_CSV == $this->type){
+            $str = '';
+        }  else {
             // 先找出最大设置的列
             $maxIndex = 0;
             $_attribute = [];
@@ -670,7 +701,9 @@ EOF;
             } else {
                 $row .= '>';
             }
-        } else {
+        } else if(self::TYPE_CSV == $this->type){
+            $row = '';
+        }  else {
             $row = '<tr ';
             if (!empty($attribute['height']) && is_numeric($attribute['height'])) {
                 $row .= 'height="' . $attribute['height'] . '" style="' . $attribute['height'] . 'pt">';
@@ -687,7 +720,9 @@ EOF;
     {
         if (self::TYPE_XML == $this->type) {
             $str = '</Row>';
-        } else {
+        } else if(self::TYPE_CSV == $this->type){
+            $str = "\r\n"; // TODO::待验证linux、mac、windows系统的兼容性
+        }  else {
             $str = '</tr>';
         }
 
@@ -719,7 +754,16 @@ EOF;
             } else {
                 $cell .= '><Data ss:Type="String">' . $cellData . '</Data></Cell>';
             }
-        } else {
+        } else if(self::TYPE_CSV == $this->type){
+            // $str = "\r\n"; // TODO::待验证linux、mac、windows系统的兼容性
+            $cell = 'A' != $this->currentColNo? ',': ''; // 只要不是第一列，都要加个,做分割
+
+            // 因为csv不支持样式，所以去掉多余的数据
+            if(is_array($cellData)){
+                $cellData = isset($cellData['value']) ? $cellData['value'] : '';
+            }
+            $cell .= '"'. $cellData .'"'; // 强制加引号，防止数据里面有逗号
+        }   else {
             $cell = '<td ';
             $styleId = (!empty($cellData['styleId']) ? $cellData['styleId'] : 's40');
             $cell .= ' class="' . $styleId . '" ';
